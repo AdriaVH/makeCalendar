@@ -28,7 +28,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email"
 ]
 
-# --- Helper Functions (Reused from your Streamlit app) ---
+# --- Helper Functions ---
 
 def make_flow(state=None):
     """Initializes and returns the Google OAuth Flow object."""
@@ -87,7 +87,7 @@ def parse_pdf(data):
             for page_num, page in enumerate(pdf.pages, 1):
                 table = page.extract_table()
                 if not table: continue # Skip if no table found on page
-                
+
                 # Basic check for a valid table (at least 2 rows, first row has columns)
                 if len(table) < 2 or len(table[0]) == 0: continue
                 df = pd.DataFrame(table[1:], columns=table[0])
@@ -100,7 +100,7 @@ def parse_pdf(data):
                 for col_name in df.columns[1:]: # Iterate through day columns
                     day_str = str(df.iloc[0][col_name]).strip()
                     if not day_str.isdigit(): continue # Skip if not a valid day number (e.g., month name)
-                    
+
                     try:
                         date = dt.date(year, page_num, int(day_str)) # Assuming page_num is month
                     except ValueError:
@@ -114,17 +114,17 @@ def parse_pdf(data):
                     if start_val.size and end_val.size and \
                        re.fullmatch(r"(\d{1,2}):(\d{2})", start_val[0]) and \
                        re.fullmatch(r"(\d{1,2}):(\d{2})", end_val[0]):
-                        
+
                         start_time = str(start_val[0]).strip()
                         end_time = str(end_val[0]).strip()
 
                         start_dt_obj = dt.datetime.fromisoformat(f"{date.isoformat()}T{start_time}")
                         end_dt_obj = dt.datetime.fromisoformat(f"{date.isoformat()}T{end_time}")
-                        
+
                         # Handle overnight shifts (end time on next day)
                         if end_dt_obj < start_dt_obj:
                             end_dt_obj += dt.timedelta(days=1)
-                        
+
                         # Create a unique key for tracking shifts
                         key = f"{date:%Y%m%d}-{start_time.replace(':','')}-{end_time.replace(':','')}"
                         shifts.append({"key": key, "date": date.isoformat(), "start": start_time, "end": end_time})
@@ -157,7 +157,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
             except HttpError as error:
                 app.logger.error(f"Error fetching existing calendar events: {error.status_code} - {error.reason}")
                 return 0, 0, 0
-        
+
         # Map existing events by their unique key
         by_key = {}
         for e in existing_events:
@@ -169,7 +169,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
             end_dt_obj = dt.datetime.fromisoformat(f"{s['date']}T{s['end']}")
             if end_dt_obj < start_dt_obj: # Adjust end date for overnight shifts
                 end_dt_obj += dt.timedelta(days=1)
-            
+
             start_iso = start_dt_obj.isoformat(timespec='seconds')
             end_iso   = end_dt_obj.isoformat(timespec='seconds')
 
@@ -206,6 +206,50 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         app.logger.error(f"An unexpected error occurred during calendar sync: {e}")
         return 0, 0, 0
 
+# --- NEW FUNCTION TO DELETE ALL APP-CREATED EVENTS ---
+def delete_all_app_events(creds, tz="Europe/Madrid"):
+    deleted_count = 0
+    try:
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        
+        # Fetch all events created by this app (using the private extended property)
+        # Note: We're not using timeMin=now here, to delete past events too
+        app_events = []
+        page_token = None
+        while True:
+            try:
+                events_result = service.events().list(
+                    calendarId="primary",
+                    privateExtendedProperty="shiftUploader=1", # Only fetch events with this flag
+                    pageToken=page_token
+                ).execute()
+                app_events.extend(events_result.get("items", []))
+                page_token = events_result.get('nextPageToken')
+                if not page_token: break
+            except HttpError as error:
+                app.logger.error(f"Error fetching events for deletion: {error.status_code} - {error.reason}")
+                return 0
+
+        if not app_events:
+            app.logger.info("No app-created events found to delete.")
+            return 0
+
+        # Delete each identified event
+        for event in app_events:
+            try:
+                service.events().delete(calendarId="primary", eventId=event["id"]).execute()
+                deleted_count += 1
+                app.logger.info(f"Deleted event: {event.get('summary', 'No Summary')} (ID: {event['id']})")
+            except HttpError as error:
+                app.logger.error(f"Error deleting event ID '{event['id']}': {error.status_code} - {error.reason}")
+                # Continue trying to delete other events even if one fails
+
+        return deleted_count
+
+    except Exception as e:
+        app.logger.error(f"An unexpected error occurred during bulk deletion: {e}")
+        return 0
+
 
 # --- Flask Routes ---
 
@@ -214,8 +258,12 @@ def index():
     creds_data = session.get("creds")
     creds = creds_from_dict(creds_data)
 
+    # Check for messages/errors passed from redirects
+    message = request.args.get("message")
+    error = request.args.get("error")
+
     if creds and creds.valid:
-        return render_template("index.html", logged_in=True)
+        return render_template("index.html", logged_in=True, message=message, error=error)
     elif creds and creds.expired and creds.refresh_token:
         # Attempt to refresh token
         try:
@@ -223,7 +271,7 @@ def index():
             flow.credentials = creds
             flow.refresh_credentials()
             session["creds"] = creds_to_dict(flow.credentials)
-            return render_template("index.html", logged_in=True, message="Token refreshed successfully!")
+            return render_template("index.html", logged_in=True, message="Token refreshed successfully!", error=error)
         except Exception as e:
             app.logger.error(f"Failed to refresh token: {e}")
             session.pop("creds", None) # Clear invalid credentials
@@ -231,7 +279,7 @@ def index():
     else:
         # Not logged in or invalid/unrefreshable creds
         session.pop("creds", None) # Ensure old/bad creds are cleared
-        return render_template("index.html", logged_in=False)
+        return render_template("index.html", logged_in=False, message=message, error=error)
 
 @app.route("/google_login")
 def google_login():
@@ -307,13 +355,29 @@ def upload_pdf():
         if not shifts:
             return render_template("index.html", logged_in=True, error="No shifts found in the PDF. Check format (Entrada/Sortida columns).")
         else:
-            # You can store shifts in session if you want to display preview before sync
-            # or just proceed directly to sync if that's the desired flow.
-            # For simplicity, we'll sync immediately here.
             ins, upd, dele = sync(creds, shifts)
             return render_template("index.html", logged_in=True, message=f"Sync Complete: Inserted {ins}, Updated {upd}, Deleted {dele} shifts.")
     else:
         return render_template("index.html", logged_in=True, error="Invalid file type. Please upload a PDF.")
+
+@app.route("/delete_all_shifts", methods=["POST"]) # Use POST to avoid accidental deletion
+def delete_all_shifts():
+    creds_data = session.get("creds")
+    creds = creds_from_dict(creds_data)
+
+    if not creds or not creds.valid:
+        return redirect(url_for("index", error="You need to be signed in to delete shifts."))
+
+    try:
+        deleted_count = delete_all_app_events(creds)
+        if deleted_count > 0:
+            return redirect(url_for("index", message=f"Successfully deleted {deleted_count} shifts created by the app!"))
+        else:
+            return redirect(url_for("index", message="No shifts created by the app were found to delete."))
+    except Exception as e:
+        app.logger.error(f"Failed to delete shifts: {e}")
+        return redirect(url_for("index", error=f"Failed to delete shifts: {e}"))
+
 
 @app.route("/logout")
 def logout():
@@ -323,4 +387,6 @@ def logout():
 
 # --- Run the app ---
 if __name__ == "__main__":
+    # In production, Render sets the PORT environment variable.
+    # debug=True should be False in production for security.
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
