@@ -198,7 +198,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
                 service.events().delete(calendarId="primary", eventId=ev["id"]).execute()
                 deletes += 1
             except HttpError as error:
-                app.logger.error(f"Error deleting event with ID '{ev["id"]}': {error.status_code} - {error.reason}")
+app.logger.error(f"Error deleting event with ID '{ev['id']}': {error.status_code} - {error.reason}")
 
         return inserts, updates, deletes
 
