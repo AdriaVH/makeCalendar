@@ -28,6 +28,52 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email"
 ]
 
+# --- PDF Parsing Configuration ---
+
+# Mapping for month names from PDF to standard numeric representation
+# IMPORTANT: These keys MUST match the month names as they appear in your PDF
+MONTH_MAP = {
+    "GENER": "01", "FEBRER": "02", "MARÇ": "03", "ABRIL": "04",
+    "MAIG": "05", "JUNY": "06", "JULIOL": "07", "AGOST": "08",
+    "SETEMBRE": "09", "OCTUBRE": "10", "NOVEMBRE": "11", "DESEMBRE": "12"
+}
+
+# Define the precise bounding box coordinates for each month's data table
+# Format: {page_number: {month_name: (x0, y0, x1, y1)}}
+MONTH_DATA_BOUNDING_BOXES = {
+    1: { # Page 1
+        "GENER": (113, 130, 240, 832),
+        "FEBRER": (253, 130, 380, 832),
+        "MARÇ": (393, 130, 517, 832)
+    },
+    2: { # Page 2
+        "ABRIL": (21, 130, 146, 832),
+        "MAIG": (156, 130, 280, 832),
+        "JUNY": (290, 130, 415, 832),
+        "JULIOL": (425, 130, 550, 832)
+    },
+    3: { # Page 3
+        "AGOST": (20, 130, 145, 832),
+        "SETEMBRE": (155, 130, 280, 832),
+        "OCTUBRE": (290, 130, 414, 832),
+        "NOVEMBRE": (424, 130, 549, 832)
+    },
+    4: { # Page 4
+        "DESEMBRE": (20, 130, 239, 832)
+    }
+}
+
+# Define table extraction settings
+TABLE_SETTINGS = {
+    "vertical_strategy": "lines",
+    "horizontal_strategy": "lines",
+    "snap_tolerance": 5,
+    "join_tolerance": 5,
+    "edge_min_length": 3,
+    # Add other settings as needed for your specific PDF structure
+}
+
+
 # --- Helper Functions ---
 
 def make_flow(state=None):
@@ -76,63 +122,148 @@ def creds_to_dict(creds):
     }
 
 
-def parse_pdf(data):
+def parse_pdf(data, target_months=None):
+    """
+    Parses a PDF for shift data, optionally filtering by specific months.
+
+    Args:
+        data (bytes): The raw PDF file content as bytes.
+        target_months (list, optional): A list of month names (e.g., ["GENER", "FEBRER"])
+                                        to process. If None, all configured months are processed.
+
+    Returns:
+        list: A list of dictionaries, each representing a shift.
+    """
     shifts = []
     try:
         with pdfplumber.open(io.BytesIO(data)) as pdf:
+            app.logger.info(f"Opened PDF for parsing.")
+
             # Try to get year from metadata title, default to current year
             year_match = re.search(r"(\d{4})", pdf.metadata.get("Title", ""))
             year = int(year_match.group(1)) if year_match else dt.datetime.now().year
+            app.logger.info(f"Detected year: {year}")
 
-            for page_num, page in enumerate(pdf.pages, 1):
-                table = page.extract_table()
-                if not table: continue # Skip if no table found on page
+            for page_num, page_obj in enumerate(pdf.pages, 1):
+                app.logger.info(f"Processing Page {page_num}...")
 
-                # Basic check for a valid table (at least 2 rows, first row has columns)
-                if len(table) < 2 or len(table[0]) == 0: continue
-                df = pd.DataFrame(table[1:], columns=table[0])
+                # Get the months expected on this page from our bounding box config
+                months_on_this_page = MONTH_DATA_BOUNDING_BOXES.get(page_num, {})
 
-                # Check if "Entrada" and "Sortida" columns exist
-                if "Entrada" not in df.columns or "Sortida" not in df.columns:
-                    app.logger.warning(f"Page {page_num}: 'Entrada' or 'Sortida' columns not found. Skipping.")
+                if not months_on_this_page:
+                    app.logger.info(f"No specific months configured for Page {page_num}. Skipping.")
                     continue
 
-                for col_name in df.columns[1:]: # Iterate through day columns
-                    day_str = str(df.iloc[0][col_name]).strip()
-                    if not day_str.isdigit(): continue # Skip if not a valid day number (e.g., month name)
-
-                    try:
-                        date = dt.date(year, page_num, int(day_str)) # Assuming page_num is month
-                    except ValueError:
-                        app.logger.warning(f"Invalid date on page {page_num}, column {col_name}: {day_str}. Skipping.")
+                for month_name, bbox in months_on_this_page.items():
+                    # If target_months are specified, skip months not in the target list
+                    if target_months and month_name not in target_months:
+                        app.logger.info(f"  Skipping {month_name} as it's not in the selected months.")
                         continue
 
-                    # Extract start and end times
-                    start_val = df.loc[df["Entrada"] == "Entrada", col_name].values
-                    end_val   = df.loc[df["Sortida"] == "Sortida", col_name].values
+                    app.logger.info(f"  Extracting data for {month_name} using bbox: {bbox}...")
+                    
+                    # Crop the page to the specific month's bounding box
+                    cropped_page = page_obj.crop(bbox)
 
-                    if start_val.size and end_val.size and \
-                       re.fullmatch(r"(\d{1,2}):(\d{2})", start_val[0]) and \
-                       re.fullmatch(r"(\d{1,2}):(\d{2})", end_val[0]):
+                    # Extract tables from the cropped region using defined settings
+                    tables = cropped_page.extract_tables(TABLE_SETTINGS)
 
-                        start_time = str(start_val[0]).strip()
-                        end_time = str(end_val[0]).strip()
+                    if not tables:
+                        app.logger.warning(f"    No tables found for {month_name} within specified bbox.")
+                        continue
 
-                        start_dt_obj = dt.datetime.fromisoformat(f"{date.isoformat()}T{start_time}")
-                        end_dt_obj = dt.datetime.fromisoformat(f"{date.isoformat()}T{end_time}")
+                    # Assuming the first table found in the cropped region is the main data table
+                    table_data = tables[0]
 
-                        # Handle overnight shifts (end time on next day)
-                        if end_dt_obj < start_dt_obj:
-                            end_dt_obj += dt.timedelta(days=1)
+                    # --- Start of specific table data processing ---
+                    # Find the row that contains the headers for the day numbers and Entrada/Sortida
+                    header_row_index = -1
+                    for r_idx, row in enumerate(table_data):
+                        if row and any(h.strip().lower() in ["dia", "entrada", "sortida"] for h in row if h):
+                            header_row_index = r_idx
+                            break
+                    
+                    if header_row_index == -1:
+                        app.logger.warning(f"    Could not find header row for {month_name}. Skipping table.")
+                        continue
+                    
+                    # Get headers, skipping empty cells
+                    raw_headers = table_data[header_row_index]
+                    
+                    # Find column indices for 'Entrada' and 'Sortida'
+                    entrada_col_idx = -1
+                    sortida_col_idx = -1
+                    
+                    for i, header_cell in enumerate(raw_headers):
+                        if header_cell:
+                            cleaned_header = header_cell.strip().lower()
+                            if "entrada" in cleaned_header:
+                                entrada_col_idx = i
+                            elif "sortida" in cleaned_header:
+                                sortida_col_idx = i
+                    
+                    if entrada_col_idx == -1 or sortida_col_idx == -1:
+                        app.logger.warning(f"    'Entrada' or 'Sortida' columns not found in {month_name}'s table. Skipping.")
+                        continue
 
-                        # Create a unique key for tracking shifts
-                        key = f"{date:%Y%m%d}-{start_time.replace(':','')}-{end_time.replace(':','')}"
-                        shifts.append({"key": key, "date": date.isoformat(), "start": start_time, "end": end_time})
-        return shifts
+                    # Iterate through rows starting from the row *after* the header row
+                    for row_idx in range(header_row_index + 1, len(table_data)):
+                        row = table_data[row_idx]
+                        
+                        # Assuming the first cell in the data row is the day number
+                        day_str = row[0].strip() if row and len(row) > 0 and row[0] else None
+
+                        if not day_str or not day_str.isdigit():
+                            continue # Skip non-day rows (e.g., month name, summary rows)
+
+                        try:
+                            day = int(day_str)
+                            # Get month number from MONTH_MAP using the month_name
+                            month_num_str = MONTH_MAP.get(month_name)
+                            if not month_num_str:
+                                app.logger.warning(f"    Month '{month_name}' not found in MONTH_MAP. Skipping day {day}.")
+                                continue
+                            
+                            current_date = dt.date(year, int(month_num_str), day)
+                        except ValueError:
+                            app.logger.warning(f"    Invalid day '{day_str}' or month '{month_name}' for date creation. Skipping.")
+                            continue
+
+                        # Extract start and end times using their determined column indices
+                        start_time_str = row[entrada_col_idx].strip() if len(row) > entrada_col_idx and row[entrada_col_idx] else None
+                        end_time_str = row[sortida_col_idx].strip() if len(row) > sortida_col_idx and row[sortida_col_idx] else None
+
+                        # Validate time formats
+                        if (start_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_time_str) and
+                            end_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_time_str)):
+                            
+                            try:
+                                start_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{start_time_str}")
+                                end_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{end_time_str}")
+
+                                # Handle overnight shifts (end time on next day)
+                                if end_dt_obj < start_dt_obj:
+                                    end_dt_obj += dt.timedelta(days=1)
+
+                                # Create a unique key for tracking shifts
+                                key = f"{current_date:%Y%m%d}-{start_time_str.replace(':','')}-{end_time_str.replace(':','')}"
+                                shifts.append({
+                                    "key": key,
+                                    "date": current_date.isoformat(),
+                                    "start": start_time_str,
+                                    "end": end_time_str
+                                })
+                            except ValueError as ve:
+                                app.logger.warning(f"    Error parsing time for {month_name} {day}: {ve}. Skipping.")
+                        else:
+                            app.logger.info(f"    No valid shift times found for {month_name} {day}. Skipping.")
+                    # --- End of specific table data processing ---
+
     except Exception as e:
         app.logger.error(f"An error occurred while parsing the PDF: {e}")
-        # traceback.print_exc() # For more detailed server logs
         return []
+
+    return shifts
 
 def sync(creds, shifts, tz="Europe/Madrid"):
     inserts, updates, deletes = 0, 0, 0
@@ -171,7 +302,7 @@ def sync(creds, shifts, tz="Europe/Madrid"):
                 end_dt_obj += dt.timedelta(days=1)
 
             start_iso = start_dt_obj.isoformat(timespec='seconds')
-            end_iso   = end_dt_obj.isoformat(timespec='seconds')
+            end_iso = end_dt_obj.isoformat(timespec='seconds')
 
             body = {
                 "summary": f"P {s['start']}-{s['end']}", # Event title
@@ -196,7 +327,6 @@ def sync(creds, shifts, tz="Europe/Madrid"):
         for ev in by_key.values():
             try:
                 service.events().delete(calendarId="primary", eventId=ev["id"]).execute()
-                deletes += 1
             except HttpError as error:
                 app.logger.error(f"Error deleting event with ID '{ev['id']}': {error.status_code} - {error.reason}")
 
@@ -262,8 +392,24 @@ def index():
     message = request.args.get("message")
     error = request.args.get("error")
 
+    # Get all available months from the bounding box configuration for the HTML dropdown
+    # We create a dictionary for display purposes, mapping internal month names to Catalan display names
+    available_months_display = {
+        "GENER": "Gener", "FEBRER": "Febrer", "MARÇ": "Març", "ABRIL": "Abril",
+        "MAIG": "Maig", "JUNY": "Juny", "JULIOL": "Juliol", "AGOST": "Agost",
+        "SETEMBRE": "Setembre", "OCTUBRE": "Octubre", "NOVEMBRE": "Novembre", "DESEMBRE": "Desembre"
+    }
+    
+    # Create a list of (internal_name, display_name) tuples for sorting and template use
+    available_months_for_template = sorted([
+        (month_key, available_months_display.get(month_key, month_key))
+        for page_months in MONTH_DATA_BOUNDING_BOXES.values()
+        for month_key in page_months.keys()
+    ], key=lambda x: list(available_months_display.keys()).index(x[0]) if x[0] in available_months_display else x[0])
+
+
     if creds and creds.valid:
-        return render_template("index.html", logged_in=True, message=message, error=error)
+        return render_template("index.html", logged_in=True, message=message, error=error, available_months=available_months_for_template)
     elif creds and creds.expired and creds.refresh_token:
         # Attempt to refresh token
         try:
@@ -271,11 +417,11 @@ def index():
             flow.credentials = creds
             flow.refresh_credentials()
             session["creds"] = creds_to_dict(flow.credentials)
-            return render_template("index.html", logged_in=True, message="Token refreshed successfully!", error=error)
+            return render_template("index.html", logged_in=True, message="Token refrescat amb èxit!", error=error, available_months=available_months_for_template)
         except Exception as e:
             app.logger.error(f"Failed to refresh token: {e}")
             session.pop("creds", None) # Clear invalid credentials
-            return render_template("index.html", logged_in=False, error="Failed to refresh token. Please sign in again.")
+            return render_template("index.html", logged_in=False, error="No s'ha pogut actualitzar el testimoni. Torna a iniciar sessió.")
     else:
         # Not logged in or invalid/unrefreshable creds
         session.pop("creds", None) # Ensure old/bad creds are cleared
@@ -294,10 +440,10 @@ def google_login():
         return redirect(authorization_url)
     except ValueError as e:
         app.logger.error(f"Configuration error for Google login: {e}")
-        return render_template("index.html", logged_in=False, error=f"App configuration error: {e}. Check environment variables.")
+        return render_template("index.html", logged_in=False, error=f"Error de configuració de l'aplicació: {e}. Comprova les variables d'entorn.")
     except Exception as e:
         app.logger.error(f"Error during Google login initiation: {e}")
-        return render_template("index.html", logged_in=False, error="Could not initiate Google login.")
+        return render_template("index.html", logged_in=False, error="No s'ha pogut iniciar la sessió amb Google.")
 
 
 @app.route("/oauth2callback")
@@ -308,15 +454,15 @@ def oauth2callback():
 
     if error:
         app.logger.error(f"OAuth callback error: {error}")
-        return render_template("index.html", logged_in=False, error=f"Google sign-in denied or error: {error}")
+        return render_template("index.html", logged_in=False, error=f"Sessió amb Google denegada o error: {error}")
 
     if not code:
         app.logger.error("OAuth callback received no code.")
-        return render_template("index.html", logged_in=False, error="Authentication failed: No code received.")
+        return render_template("index.html", logged_in=False, error="Autenticació fallida: No s'ha rebut cap codi.")
 
     if state != session.get("oauth_state"):
         app.logger.error("OAuth state mismatch.")
-        return render_template("index.html", logged_in=False, error="Authentication failed: State mismatch.")
+        return render_template("index.html", logged_in=False, error="Autenticació fallida: Desajustament d'estat.")
 
     try:
         flow = make_flow(state=state)
@@ -326,67 +472,103 @@ def oauth2callback():
         session["creds"] = creds_to_dict(flow.credentials)
         session.pop("oauth_state", None) # Clear state after successful use
 
-        return redirect(url_for("index", message="Successfully signed in with Google!"))
+        return redirect(url_for("index", message="Sessió iniciada amb Google amb èxit!"))
     except Exception as e:
         app.logger.error(f"Error during token exchange: {e}")
         session.pop("creds", None) # Clear invalid credentials
         session.pop("oauth_state", None)
-        return render_template("index.html", logged_in=False, error=f"Authentication failed: {e}. Please try again.")
+        return render_template("index.html", logged_in=False, error=f"Autenticació fallida: {e}. Torna-ho a provar.")
 
 @app.route("/upload_pdf", methods=["POST"])
 def upload_pdf():
     creds_data = session.get("creds")
     creds = creds_from_dict(creds_data)
 
+    # Get all available months from the bounding box configuration for the HTML dropdown
+    available_months_display = {
+        "GENER": "Gener", "FEBRER": "Febrer", "MARÇ": "Març", "ABRIL": "Abril",
+        "MAIG": "Maig", "JUNY": "Juny", "JULIOL": "Juliol", "AGOST": "Agost",
+        "SETEMBRE": "Setembre", "OCTUBRE": "Octubre", "NOVEMBRE": "Novembre", "DESEMBRE": "Desembre"
+    }
+    available_months_for_template = sorted([
+        (month_key, available_months_display.get(month_key, month_key))
+        for page_months in MONTH_DATA_BOUNDING_BOXES.values()
+        for month_key in page_months.keys()
+    ], key=lambda x: list(available_months_display.keys()).index(x[0]) if x[0] in available_months_display else x[0])
+
+
     if not creds or not creds.valid:
-        return redirect(url_for("index", error="You need to be signed in to upload a PDF."))
+        return redirect(url_for("index", error="Has d'iniciar sessió per pujar un PDF."))
 
     if 'pdf_file' not in request.files:
-        return render_template("index.html", logged_in=True, error="No file part in the request.")
+        return render_template("index.html", logged_in=True, error="No s'ha trobat cap fitxer a la sol·licitud.", available_months=available_months_for_template)
 
     pdf_file = request.files['pdf_file']
     if pdf_file.filename == '':
-        return render_template("index.html", logged_in=True, error="No selected file.")
+        return render_template("index.html", logged_in=True, error="No s'ha seleccionat cap fitxer.", available_months=available_months_for_template)
 
     if pdf_file and pdf_file.filename.lower().endswith('.pdf'):
         pdf_data = pdf_file.read()
-        shifts = parse_pdf(pdf_data)
+        
+        # Get selected months from the form.
+        selected_months = request.form.getlist('months')
+        if not selected_months: # If nothing is selected, process all months by default
+            app.logger.info("No specific months selected, parsing all configured months.")
+            target_months = None # parse_pdf will process all if None
+        else:
+            app.logger.info(f"Months selected for parsing: {selected_months}")
+            target_months = selected_months
+
+        shifts = parse_pdf(pdf_data, target_months=target_months)
 
         if not shifts:
-            return render_template("index.html", logged_in=True, error="No shifts found in the PDF. Check format (Entrada/Sortida columns).")
+            return render_template("index.html", logged_in=True, error="No s'han trobat torns al PDF. Comprova el format (columnes Entrada/Sortida) o els mesos seleccionats.", available_months=available_months_for_template)
         else:
             ins, upd, dele = sync(creds, shifts)
-            return render_template("index.html", logged_in=True, message=f"Sync Complete: Inserted {ins}, Updated {upd}, Deleted {dele} shifts.")
+            return render_template("index.html", logged_in=True, message=f"Sincronització completada: {ins} torns inserits, {upd} actualitzats, {dele} eliminats.", available_months=available_months_for_template)
     else:
-        return render_template("index.html", logged_in=True, error="Invalid file type. Please upload a PDF.")
+        return render_template("index.html", logged_in=True, error="Tipus de fitxer invàlid. Puja un PDF.", available_months=available_months_for_template)
 
 @app.route("/delete_all_shifts", methods=["POST"]) # Use POST to avoid accidental deletion
 def delete_all_shifts():
     creds_data = session.get("creds")
     creds = creds_from_dict(creds_data)
 
+    # Get all available months from the bounding box configuration for the HTML dropdown
+    available_months_display = {
+        "GENER": "Gener", "FEBRER": "Febrer", "MARÇ": "Març", "ABRIL": "Abril",
+        "MAIG": "Maig", "JUNY": "Juny", "JULIOL": "Juliol", "AGOST": "Agost",
+        "SETEMBRE": "Setembre", "OCTUBRE": "Octubre", "NOVEMBRE": "Novembre", "DESEMBRE": "Desembre"
+    }
+    available_months_for_template = sorted([
+        (month_key, available_months_display.get(month_key, month_key))
+        for page_months in MONTH_DATA_BOUNDING_BOXES.values()
+        for month_key in page_months.keys()
+    ], key=lambda x: list(available_months_display.keys()).index(x[0]) if x[0] in available_months_display else x[0])
+
+
     if not creds or not creds.valid:
-        return redirect(url_for("index", error="You need to be signed in to delete shifts."))
+        return redirect(url_for("index", error="Has d'iniciar sessió per eliminar torns."))
 
     try:
         deleted_count = delete_all_app_events(creds)
         if deleted_count > 0:
-            return redirect(url_for("index", message=f"Successfully deleted {deleted_count} shifts created by the app!"))
+            return redirect(url_for("index", message=f"S'han eliminat amb èxit {deleted_count} torns creats per l'aplicació!"))
         else:
-            return redirect(url_for("index", message="No shifts created by the app were found to delete."))
+            return redirect(url_for("index", message="No s'han trobat torns creats per l'aplicació per eliminar."))
     except Exception as e:
         app.logger.error(f"Failed to delete shifts: {e}")
-        return redirect(url_for("index", error=f"Failed to delete shifts: {e}"))
+        return redirect(url_for("index", error=f"No s'han pogut eliminar els torns: {e}"))
 
 
 @app.route("/logout")
 def logout():
     session.pop("creds", None)
     session.pop("oauth_state", None)
-    return redirect(url_for("index", message="Logged out successfully!"))
+    return redirect(url_for("index", message="Sessió tancada amb èxit!"))
 
 # --- Run the app ---
 if __name__ == "__main__":
     # In production, Render sets the PORT environment variable.
     # debug=True should be False in production for security.
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5
