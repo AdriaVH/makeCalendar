@@ -165,15 +165,32 @@ def parse_pdf(data, target_months=None):
                     # Crop the page to the specific month's bounding box
                     cropped_page = page_obj.crop(bbox)
 
+                    # --- DEBUG LOGS: Print raw text from cropped page ---
+                    print(f"\n--- DEBUG: Page {page_num}, Month {month_name} ---")
+                    print("DEBUG: Raw text extracted from cropped page (first 500 chars):")
+                    print(cropped_page.extract_text()[:500])
+                    # --- END DEBUG LOGS ---
+
                     # Extract tables from the cropped region using defined settings
                     tables = cropped_page.extract_tables(TABLE_SETTINGS)
 
                     if not tables:
                         app.logger.warning(f"    No tables found for {month_name} within specified bbox.")
+                        print(f"DEBUG: No tables found for {month_name} within specified bbox.")
                         continue
 
                     # Assuming the first table found in the cropped region is the main data table
                     table_data = tables[0]
+
+                    # --- DEBUG LOGS: Print extracted table data ---
+                    print(f"DEBUG: Table Data for {month_name} (first 10 rows):")
+                    for r_idx, row in enumerate(table_data):
+                        if r_idx < 10: # Limit output to first 10 rows for brevity
+                            print(f"  Row {r_idx}: {row}")
+                        else:
+                            print(f"  ... (skipped {len(table_data) - 10} rows) ...")
+                            break
+                    # --- END DEBUG LOGS ---
 
                     # --- Start of specific table data processing ---
                     # Find the row that contains the headers for the day numbers and Entrada/Sortida
@@ -185,10 +202,16 @@ def parse_pdf(data, target_months=None):
                     
                     if header_row_index == -1:
                         app.logger.warning(f"    Could not find header row for {month_name}. Skipping table.")
+                        print(f"DEBUG: Could not find header row for {month_name}.")
+                        print(f"DEBUG: First row of table was: {table_data[0] if table_data else 'N/A'}")
                         continue
                     
                     # Get headers, skipping empty cells
                     raw_headers = table_data[header_row_index]
+
+                    # --- DEBUG LOGS: Print raw headers ---
+                    print(f"DEBUG: Raw Headers for {month_name}: {raw_headers}")
+                    # --- END DEBUG LOGS ---
                     
                     # Find all column indices for 'Entrada' and 'Sortida'
                     entrada_col_indices = []
@@ -202,6 +225,11 @@ def parse_pdf(data, target_months=None):
                             elif "sortida" in cleaned_header:
                                 sortida_col_indices.append(i)
                     
+                    # --- DEBUG LOGS: Print found column indices ---
+                    print(f"DEBUG: Entrada column indices found: {entrada_col_indices}")
+                    print(f"DEBUG: Sortida column indices found: {sortida_col_indices}")
+                    # --- END DEBUG LOGS ---
+
                     if not entrada_col_indices or not sortida_col_indices:
                         app.logger.warning(f"    No 'Entrada' or 'Sortida' columns found in {month_name}'s table. Skipping.")
                         continue
@@ -211,6 +239,10 @@ def parse_pdf(data, target_months=None):
                     shift_column_pairs = []
                     for i in range(min(len(entrada_col_indices), len(sortida_col_indices))):
                         shift_column_pairs.append((entrada_col_indices[i], sortida_col_indices[i]))
+
+                    # --- DEBUG LOGS: Print formed shift column pairs ---
+                    print(f"DEBUG: Formed shift column pairs: {shift_column_pairs}")
+                    # --- END DEBUG LOGS ---
 
                     if not shift_column_pairs:
                         app.logger.warning(f"    Could not form valid Entrada/Sortida pairs for {month_name}. Skipping.")
@@ -245,6 +277,10 @@ def parse_pdf(data, target_months=None):
                             start_time_str = row[entrada_col_idx].strip() if len(row) > entrada_col_idx and row[entrada_col_idx] else None
                             end_time_str = row[sortida_col_idx].strip() if len(row) > sortida_col_idx and row[sortida_col_idx] else None
 
+                            # --- DEBUG LOGS: Print extracted time strings ---
+                            print(f"DEBUG: Day {day}, Shift Pair {shift_pair_idx + 1}: Start='{start_time_str}', End='{end_time_str}'")
+                            # --- END DEBUG LOGS ---
+
                             # Validate time formats
                             if (start_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_time_str) and
                                 end_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_time_str)):
@@ -265,14 +301,18 @@ def parse_pdf(data, target_months=None):
                                         "start": start_time_str,
                                         "end": end_time_str
                                     })
+                                    print(f"DEBUG: Added shift for {current_date.isoformat()} from {start_time_str} to {end_time_str} (Key: {key})")
                                 except ValueError as ve:
                                     app.logger.warning(f"    Error parsing time for {month_name} {day} (shift {shift_pair_idx + 1}): {ve}. Skipping.")
+                                    print(f"DEBUG: ValueError for {month_name} {day} (shift {shift_pair_idx + 1}): {ve}")
                             else:
                                 app.logger.info(f"    No valid shift times found for {month_name} {day} (shift {shift_pair_idx + 1}). Skipping.")
+                                print(f"DEBUG: Invalid time format for {month_name} {day} (shift {shift_pair_idx + 1}). Start: '{start_time_str}', End: '{end_time_str}'")
                     # --- End of specific table data processing ---
 
     except Exception as e:
         app.logger.error(f"An error occurred while parsing the PDF: {e}")
+        print(f"DEBUG: An unexpected error occurred during PDF parsing: {e}")
         return []
 
     return shifts
