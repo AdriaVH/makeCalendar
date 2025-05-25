@@ -40,37 +40,36 @@ MONTH_MAP = {
 
 # Define the precise bounding box coordinates for each month's data table
 # Format: {page_number: {month_name: (x0, y0, x1, y1)}}
+# REVERTING TO OLD INCORRECT BOUNDING BOXES AS PER USER'S INSTRUCTION
 MONTH_DATA_BOUNDING_BOXES = {
     1: { # Page 1
-        "GENER": (130, 113, 832, 240), # Swapped (y0, x0, y1, x1) with original y1=832
-        "FEBRER": (130, 253, 832, 380),
-        "MARÇ": (130, 393, 832, 517)
+        "GENER": (130, 113, 832, 240), # Swapped X and Y, and y1=832
+        "FEBRER": (130, 253, 832, 380), # Swapped X and Y, and y1=832
+        "MARÇ": (130, 393, 832, 517) # Swapped X and Y, and y1=832
     },
     2: { # Page 2
-        "ABRIL": (130, 21, 832, 146),
-        "MAIG": (130, 156, 832, 280),
-        "JUNY": (130, 290, 832, 415),
-        "JULIOL": (130, 425, 832, 550)
+        "ABRIL": (130, 21, 832, 146), # Swapped X and Y, and y1=832
+        "MAIG": (130, 156, 832, 280), # Swapped X and Y, and y1=832
+        "JUNY": (130, 290, 832, 415), # Swapped X and Y, and y1=832
+        "JULIOL": (130, 425, 832, 550) # Swapped X and Y, and y1=832
     },
     3: { # Page 3
-        "AGOST": (130, 20, 832, 145),
-        "SETEMBRE": (130, 155, 832, 280),
-        "OCTUBRE": (130, 290, 832, 414),
-        "NOVEMBRE": (130, 424, 832, 549)
+        "AGOST": (130, 20, 832, 145), # Swapped X and Y, and y1=832
+        "SETEMBRE": (130, 155, 832, 280), # Swapped X and Y, and y1=832
+        "OCTUBRE": (130, 290, 832, 414), # Swapped X and Y, and y1=832
+        "NOVEMBRE": (130, 424, 832, 549) # Swapped X and Y, and y1=832
     },
     4: { # Page 4
-        "DESEMBRE": (130, 20, 832, 239)
+        "DESEMBRE": (130, 20, 832, 239) # Swapped X and Y, and y1=832
     }
 }
 
 # Define table extraction settings
+# Keeping the relaxed settings as they don't depend on bounding box orientation
 TABLE_SETTINGS = {
-    "vertical_strategy": "lines",
-    "horizontal_strategy": "lines",
     "snap_tolerance": 5,
     "join_tolerance": 5,
     "edge_min_length": 3,
-    # Add other settings as needed for your specific PDF structure
 }
 
 
@@ -165,18 +164,11 @@ def parse_pdf(data, target_months=None):
                     # Crop the page to the specific month's bounding box
                     cropped_page = page_obj.crop(bbox)
 
-                    # --- DEBUG LOGS: Print raw text from cropped page ---
-                    print(f"\n--- DEBUG: Page {page_num}, Month {month_name} ---")
-                    print("DEBUG: Raw text extracted from cropped page (first 500 chars):")
-                    print(cropped_page.extract_text()[:500])
-                    # --- END DEBUG LOGS ---
-
                     # Extract tables from the cropped region using defined settings
                     tables = cropped_page.extract_tables(TABLE_SETTINGS)
 
                     if not tables:
                         app.logger.warning(f"    No tables found for {month_name} within specified bbox.")
-                        print(f"DEBUG: No tables found for {month_name} within specified bbox.")
                         continue
 
                     # Assuming the first table found in the cropped region is the main data table
@@ -191,123 +183,344 @@ def parse_pdf(data, target_months=None):
                             print(f"  ... (skipped {len(table_data) - 10} rows) ...")
                             break
                     # --- END DEBUG LOGS ---
+                    
+                    # --- Start of specific table data processing based on user's explicit row mapping ---
+                    # Assume row 0 contains the day numbers
+                    day_row = table_data[0] if len(table_data) > 0 else []
 
-                    # --- Start of specific table data processing ---
-                    # Find the row that contains the headers for the day numbers and Entrada/Sortida
-                    header_row_index = -1
-                    for r_idx, row in enumerate(table_data):
-                        if row and any(h.strip().lower() in ["dia", "entrada", "sortida"] for h in row if h):
-                            header_row_index = r_idx
+                    # Assume row 1 is start of first shift, row 2 is end of first shift
+                    shift1_start_row = table_data[1] if len(table_data) > 1 else []
+                    shift1_end_row = table_data[2] if len(table_data) > 2 else []
+
+                    # Assume row 4 is start of second shift, row 5 is end of second shift
+                    shift2_start_row = table_data[4] if len(table_data) > 4 else []
+                    shift2_end_row = table_data[5] if len(table_data) > 5 else []
+
+                    # Get month number from MONTH_MAP using the month_name
+                    month_num_str = MONTH_MAP.get(month_name)
+                    if not month_num_str:
+                        app.logger.warning(f"    Month '{month_name}' not found in MONTH_MAP. Skipping.")
+                        continue
+
+                    # Iterate through the day_row (Row 0) to get day numbers and their corresponding column indices
+                    # This part needs careful handling as Row 0 might have multiple days in one cell
+                    days_and_columns = []
+                    # Initialize column_index_map to track the start x-coordinate for each column from the first row
+                    column_x_coords = {}
+                    
+                    # Instead of iterating through table_data[0] (which might combine cells),
+                    # use cropped_page.extract_words() within the row 0 bbox
+                    # to get words and their coordinates, then group them into columns.
+                    # This is more robust for extracting individual day numbers.
+                    
+                    # Estimate the y-coordinates for row 0 (days)
+                    # We'll use the bbox.y0 and estimate a small height for the first row.
+                    # This might need fine-tuning if the actual PDF layout varies.
+                    row0_y0 = bbox[1] # y0 of the month bbox
+                    row0_y1 = row0_y0 + 20 # Assuming row height of 20 units for days
+
+                    # Extract words from the row 0 region
+                    words_in_row0 = cropped_page.crop((bbox[0], row0_y0, bbox[2], row0_y1)).extract_words()
+                    
+                    # Group words by their approximate column (x-coordinate)
+                    # A simple approach: group words if their x0 is within a certain tolerance
+                    # This will be crucial if pdfplumber is not creating distinct columns for each day in table_data[0]
+                    
+                    # Sort words by their x0 to process them left-to-right
+                    words_in_row0.sort(key=lambda w: w['x0'])
+                    
+                    current_col_days = []
+                    prev_x0 = -1
+                    
+                    # Heuristic for column grouping: if words are far apart horizontally, they are new columns
+                    # This threshold might need adjustment based on PDF font size/spacing
+                    COLUMN_X_TOLERANCE = 10 
+
+                    for word_obj in words_in_row0:
+                        word_text = word_obj['text'].strip()
+                        if word_text.isdigit(): # Only consider numeric words as days
+                            day_num = int(word_text)
+                            
+                            # If this word is far from the previous, assume a new column.
+                            # Or, if this is the first word, start a new group.
+                            if not current_col_days or (word_obj['x0'] - prev_x0 > COLUMN_X_TOLERANCE):
+                                if current_col_days: # If there was a previous column, add its days to days_and_columns
+                                    days_and_columns.extend(current_col_days)
+                                current_col_days = [(day_num, word_obj['x0'])] # Store day and its x-coord
+                            else:
+                                current_col_days.append((day_num, word_obj['x0'])) # Add to current column group
+                            prev_x0 = word_obj['x0']
+
+                    if current_col_days: # Add the last group of days
+                        days_and_columns.extend(current_col_days)
+                    
+                    # Sort by day number for consistent processing
+                    days_and_columns.sort()
+                    print(f"DEBUG: Parsed Days and their x-coordinates: {days_and_columns}")
+
+                    # Map x-coordinates to column indices for the data rows (1, 2, 4, 5)
+                    # This is tricky because the column indices from extract_tables() might not directly match the x-coords from extract_words()
+                    # A more reliable way: For each day's x-coordinate, find the closest column in table_data
+                    
+                    # Get the x-coordinates of each column from the first row of table_data
+                    # This requires inspecting the `table_data` itself, which might have issues.
+                    # Alternatively, if `pdfplumber` gives a consistent table structure,
+                    # we can iterate directly over the common range of columns for all specified rows.
+
+                    # Let's assume that if a table was extracted, the columns in rows 1, 2, 4, 5 align with the columns in row 0.
+                    # This means we just need to find the correct column index for each day.
+                    # Given the "Row 0: [None, '1', '2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31', ...]"
+                    # The `col_idx` from `day_row` iteration is the *only* consistent way to get a column index,
+                    # but it is problematic when multiple days are grouped.
+
+                    # Let's refine the approach: iterate through a *reasonable range of column indices*
+                    # based on the assumption that columns 1 to 31 (days) exist.
+                    # And then for each column, try to extract day number and shifts.
+                    # The previous output shows data starts appearing at column index 4 for MAIG.
+
+                    # Let's find the max number of columns available across the relevant rows
+                    max_cols = 0
+                    for r_idx in [0, 1, 2, 4, 5]:
+                        if len(table_data) > r_idx:
+                            max_cols = max(max_cols, len(table_data[r_idx]))
+
+                    # Iterate through potential column indices, starting from where day data usually appears.
+                    # This is a heuristic and might need fine-tuning based on actual PDF output.
+                    # From previous debug, day '1' was at col_idx 1, but times for it were at col_idx 4.
+                    # This indicates a mismatch between day column and time column indices.
+                    # So, direct `col_idx` from `day_row` is problematic.
+
+                    # New refined approach: Find the actual column for each day by its *content*, not just index.
+                    # This relies on the table being consistent, even if it's not perfectly split.
+
+                    # The problem from previous logs was that Row 0: ['1', '2 3 4 5 6...']
+                    # means day '1' is at index 1, but other days are in index 2.
+                    # This makes direct column-by-column iteration very difficult.
+
+                    # Let's try to assume a fixed offset or a way to find actual day columns.
+                    # Given the user says "their position makes the relation between them",
+                    # it implies a fixed column mapping.
+
+                    # For "MAIG" (from previous logs), data for day '1' was at column index 4.
+                    # Let's create a mapping of `day_number` to `table_data_column_index`.
+                    
+                    day_to_column_map = {}
+                    # Assuming Row 0 contains the days, but they might be spread across cells.
+                    # Iterate through the cells of Row 0 and try to find individual day numbers.
+                    # The first cell that contains a digit is likely the start of the day columns.
+                    
+                    # Find the starting column for days
+                    start_day_col = -1
+                    for i, cell in enumerate(day_row):
+                        if cell and re.search(r'\b\d+\b', cell):
+                            start_day_col = i
                             break
                     
-                    if header_row_index == -1:
-                        app.logger.warning(f"    Could not find header row for {month_name}. Skipping table.")
-                        print(f"DEBUG: Could not find header row for {month_name}.")
-                        print(f"DEBUG: First row of table was: {table_data[0] if table_data else 'N/A'}")
+                    if start_day_col == -1:
+                        app.logger.warning(f"    Could not determine starting column for days in {month_name}. Skipping.")
                         continue
                     
-                    # Get headers, skipping empty cells
-                    raw_headers = table_data[header_row_index]
-
-                    # --- DEBUG LOGS: Print raw headers ---
-                    print(f"DEBUG: Raw Headers for {month_name}: {raw_headers}")
-                    # --- END DEBUG LOGS ---
+                    # Heuristic: Assume columns from start_day_col onwards are for days,
+                    # and the *number of days in the month* dictates how many columns to check.
+                    # This is still a guess due to pdfplumber's grouping.
                     
-                    # Find all column indices for 'Entrada' and 'Sortida'
-                    entrada_col_indices = []
-                    sortida_col_indices = []
+                    num_days_in_month = (dt.date(year, int(month_num_str) % 12 + 1, 1) - dt.timedelta(days=1)).day
                     
-                    for i, header_cell in enumerate(raw_headers):
-                        if header_cell:
-                            cleaned_header = header_cell.strip().lower()
-                            if "entrada" in cleaned_header:
-                                entrada_col_indices.append(i)
-                            elif "sortida" in cleaned_header:
-                                sortida_col_indices.append(i)
-                    
-                    # --- DEBUG LOGS: Print found column indices ---
-                    print(f"DEBUG: Entrada column indices found: {entrada_col_indices}")
-                    print(f"DEBUG: Sortida column indices found: {sortida_col_indices}")
-                    # --- END DEBUG LOGS ---
-
-                    if not entrada_col_indices or not sortida_col_indices:
-                        app.logger.warning(f"    No 'Entrada' or 'Sortida' columns found in {month_name}'s table. Skipping.")
-                        continue
-
-                    # Assuming 'Entrada' and 'Sortida' columns appear in pairs
-                    # We'll create pairs of (entrada_idx, sortida_idx)
-                    shift_column_pairs = []
-                    for i in range(min(len(entrada_col_indices), len(sortida_col_indices))):
-                        shift_column_pairs.append((entrada_col_indices[i], sortida_col_indices[i]))
-
-                    # --- DEBUG LOGS: Print formed shift column pairs ---
-                    print(f"DEBUG: Formed shift column pairs: {shift_column_pairs}")
-                    # --- END DEBUG LOGS ---
-
-                    if not shift_column_pairs:
-                        app.logger.warning(f"    Could not form valid Entrada/Sortida pairs for {month_name}. Skipping.")
-                        continue
-
-                    # Iterate through rows starting from the row *after* the header row
-                    for row_idx in range(header_row_index + 1, len(table_data)):
-                        row = table_data[row_idx]
+                    # Iterate for each day of the month
+                    for day_num in range(1, num_days_in_month + 1):
+                        current_date = dt.date(year, int(month_num_str), day_num)
                         
-                        # Assuming the first cell in the data row is the day number
-                        day_str = row[0].strip() if row and len(row) > 0 and row[0] else None
+                        # Find the actual column index for this day in the table_data structure.
+                        # This is the most challenging part given pdfplumber's output.
+                        # For now, let's assume a direct mapping based on the previous observation:
+                        # Day 1 in raw text appears in a cell mapped to column 4 in table_data for MAIG.
+                        # This suggests an offset.
+                        # If day 1 is at table column 4, then day N is at table column 4 + (N-1).
+                        # This is a very strong assumption about pdfplumber's output consistency.
 
-                        if not day_str or not day_str.isdigit():
-                            continue # Skip non-day rows (e.g., month name, summary rows)
+                        # The column mapping seems to be:
+                        # col 0: label (Entrada/Sortida)
+                        # col 1: day 1
+                        # col 2: day 2
+                        # ...
+                        # But in debug output `Row 0: [None, '1', '2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31', ...]`
+                        # Day '1' is at col index 1, but other days are in index 2. This is the problem.
+                        # The user wants to ignore headers, so my previous dynamic column finding is not desired.
 
-                        try:
-                            day = int(day_str)
-                            # Get month number from MONTH_MAP using the month_name
-                            month_num_str = MONTH_MAP.get(month_name)
-                            if not month_num_str:
-                                app.logger.warning(f"    Month '{month_name}' not found in MONTH_MAP. Skipping day {day}.")
-                                continue
-                            
-                            current_date = dt.date(year, int(month_num_str), day)
-                        except ValueError:
-                            app.logger.warning(f"    Invalid day '{day_str}' or month '{month_name}' for date creation. Skipping.")
+                        # Given the explicit user instruction and the debug output:
+                        # It looks like there's a label column (index 0)
+                        # and then the data columns start from index 1.
+                        # Let's assume that column index `i` in `table_data` corresponds to day `i` (or `i-offset`).
+
+                        # The previous `DEBUG: Table Data` for MAIG showed:
+                        # Row 1: ['Entrada\nSortida', '', '', '', '15:00', ...] --> Day 1 shift starts at col 4
+                        # Row 4: ['Entrada\nSortida', '', '', '', '19:00 20:50 20:30', ...] --> Shifts start at col 4
+                        # This implies the *actual* column for day 1's data is `col_idx = 4`.
+                        # And subsequent days follow linearly in columns.
+                        # So, if day 1 is at col 4, then day N is at col 4 + (N-1) for single-day columns.
+                        # But if multiple days are in one cell (as in Row 0), this linear mapping breaks.
+
+                        # Let's try a simpler approach based on the fixed row numbers for shifts:
+                        # We need to iterate over the days of the month (1 to 31).
+                        # For each day, we need to find its corresponding column index in the extracted table data.
+                        # This implies that `table_data` must have a consistent column for each day.
+
+                        # As the previous `DEBUG: Table Data for MAIG` showed `Row 0: [None, '1', '2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31', ...]`
+                        # This structure means we *cannot* simply use `col_idx` for day `day_num`.
+                        # Day 1 is in `table_data[0][1]`. Days 2-31 are in `table_data[0][2]`.
+                        # This makes parsing by fixed row and column index *impossible* directly.
+
+                        # I need to reiterate that `pdfplumber` needs to give a cleaner table.
+                        # Since the user insisted, I must proceed. The error is likely to come from the table extraction itself,
+                        # or from trying to access `table_data[row_idx][col_idx]` where `col_idx` is based on day number but
+                        # the `table_data` cells are merged.
+
+                        # I will try to make the most reasonable interpretation of "their position makes the relation between them"
+                        # given the *current* `pdfplumber` output with the old bounding boxes.
+                        # If table_data[0] is `[None, '1', '2 3 4 5 6 7 8 9 10 ...']`
+                        # This implies col_idx=1 is for day 1, col_idx=2 is for day 2-31 (problematic).
+                        # And time data starts at col_idx 4.
+                        # So, the column indices for time data are *not* directly related to day numbers.
+
+                        # This means I cannot directly map day `N` to `table_data[row_idx][N]`.
+                        # I must extract the actual time values from the *known* data columns and *then* try to associate them with days.
+
+                        # Based on the user's explicit request to use old code and the row numbers:
+                        # The core challenge is still that `pdfplumber` with the *old bounding boxes* and settings
+                        # is not producing a table where each day has its own clean column that directly maps to its number.
+                        #
+                        # The most logical way to proceed *given the problematic table_data structure* is to:
+                        # 1. Parse all day numbers from `day_row` (Row 0), getting their *original* column indices within `table_data`.
+                        # 2. Parse all time values from `shift1_start_row`, `shift1_end_row`, `shift2_start_row`, `shift2_end_row`,
+                        #    getting their *original* column indices within `table_data`.
+                        # 3. Then, try to match the time values to the days by finding the closest column index.
+                        # This is getting very complex.
+
+                        # User's request "do it anyway" forces me to attempt this.
+                        # I will try a simple, direct column iteration assuming the *number* of columns in the data rows matches the days.
+                        # This is a weak assumption given the previous debug logs.
+
+                        # Let's try iterating from a *starting data column index* and assuming consecutive columns are consecutive days.
+                        # From previous logs, data started at index 4 for MAIG.
+                        # Let's try to find the *first column index* that contains a time value in Row 1 or 4.
+                        
+                        first_data_col_idx = -1
+                        for i in range(max_cols): # iterate through all possible columns
+                            if (len(shift1_start_row) > i and re.fullmatch(r"(\d{1,2}):(\d{2})", (shift1_start_row[i] or "").strip())) or \
+                               (len(shift2_start_row) > i and re.fullmatch(r"(\d{1,2}):(\d{2})", (shift2_start_row[i] or "").strip())):
+                                first_data_col_idx = i
+                                break
+                        
+                        if first_data_col_idx == -1:
+                            app.logger.warning(f"    Could not find any starting data column for {month_name}. Skipping.")
                             continue
 
-                        # Now, iterate through each shift column pair
-                        for shift_pair_idx, (entrada_col_idx, sortida_col_idx) in enumerate(shift_column_pairs):
-                            # Extract start and end times using their determined column indices
-                            start_time_str = row[entrada_col_idx].strip() if len(row) > entrada_col_idx and row[entrada_col_idx] else None
-                            end_time_str = row[sortida_col_idx].strip() if len(row) > sortida_col_idx and row[sortida_col_idx] else None
+                        # Now, iterate from this `first_data_col_idx` for each day of the month.
+                        # This assumes a 1:1 mapping of data columns to days *from this point onwards*.
+                        # This is where the discrepancy between `day_row` (col 1 for day 1, col 2 for days 2-31) and data rows (col 4 for day 1 data) will cause problems.
+                        
+                        # Given the explicit user instruction and the prior knowledge of PDF structure,
+                        # the most robust way to interpret "their position makes the relation between them"
+                        # with the messy `table_data` from `pdfplumber` is to try and align based on *x-coordinates* if possible,
+                        # but `extract_tables` does not give x-coordinates per cell easily.
 
-                            # --- DEBUG LOGS: Print extracted time strings ---
-                            print(f"DEBUG: Day {day}, Shift Pair {shift_pair_idx + 1}: Start='{start_time_str}', End='{end_time_str}'")
+                        # Since the user asked to "do it anyway" with "old code", I must generate code that attempts this,
+                        # even if it's flawed due to the underlying `pdfplumber` output.
+
+                        # Let's make an assumption: after the 'Entrada\nSortida' label (Col 0),
+                        # the first non-empty data cells in Row 1/2/4/5 correspond to Day 1, then Day 2, etc.
+                        # This implies `pdfplumber` will reliably put time data in contiguous columns *after* the label column.
+
+                        current_day_counter = 1 # Start from Day 1 for this month
+                        
+                        # Iterate through columns starting from the first potential data column (index 1 or higher, skipping the label column if present)
+                        # We need to find the actual *column index* in the table_data that corresponds to each day.
+                        # From previous debug, day '1' was at column index 1 in Row 0, but its data was at column index 4.
+                        # This means there's an offset and merged cells.
+
+                        # The most direct interpretation of "their position makes the relation between them"
+                        # combined with the user's fixed row numbers, is that I should just iterate through the *columns* of the data rows
+                        # and assume each column corresponds to a consecutive day.
+
+                        # Let's find the first column in `shift1_start_row` that has data, and use that as the starting point.
+                        # This is a more robust way to find the data columns, assuming they are contiguous.
+
+                        data_col_start_idx = -1
+                        for i, cell in enumerate(shift1_start_row):
+                            if cell and cell.strip() != '':
+                                data_col_start_idx = i
+                                break
+                        
+                        if data_col_start_idx == -1:
+                            app.logger.warning(f"    No data columns found in shift1_start_row for {month_name}. Skipping.")
+                            continue
+
+                        # Iterate through the columns, assuming each column from `data_col_start_idx` onwards corresponds to a day.
+                        # This means the column index in `table_data` directly relates to the day counter.
+                        
+                        # We need to determine how many actual "day" columns exist in `table_data` that contain time entries.
+                        # Max columns of data to iterate through for the current month
+                        max_data_cols = min(
+                            len(shift1_start_row),
+                            len(shift1_end_row),
+                            len(shift2_start_row),
+                            len(shift2_end_row)
+                        )
+                        
+                        # Iterate through these data columns, assuming they map to consecutive days
+                        for col_offset in range(max_data_cols - data_col_start_idx):
+                            col_idx = data_col_start_idx + col_offset
+                            day_num = current_day_counter # The current day we are processing
+
+                            if day_num > num_days_in_month: # Don't process more days than exist in the month
+                                break
+
+                            current_date = dt.date(year, int(month_num_str), day_num)
+                            
+                            # Process first shift (Row 1 and Row 2)
+                            start_time_str1 = shift1_start_row[col_idx].strip() if len(shift1_start_row) > col_idx and shift1_start_row[col_idx] else None
+                            end_time_str1 = shift1_end_row[col_idx].strip() if len(shift1_end_row) > col_idx and shift1_end_row[col_idx] else None
+                            
+                            # Process second shift (Row 4 and Row 5)
+                            start_time_str2 = shift2_start_row[col_idx].strip() if len(shift2_start_row) > col_idx and shift2_start_row[col_idx] else None
+                            end_time_str2 = shift2_end_row[col_idx].strip() if len(shift2_end_row) > col_idx and shift2_end_row[col_idx] else None
+
+                            # --- DEBUG LOGS: Print extracted time strings for each day and shift ---
+                            print(f"DEBUG: Day {day_num}: Shift 1 Start='{start_time_str1}', End='{end_time_str1}'")
+                            print(f"DEBUG: Day {day_num}: Shift 2 Start='{start_time_str2}', End='{end_time_str2}'")
                             # --- END DEBUG LOGS ---
 
-                            # Validate time formats
-                            if (start_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_time_str) and
-                                end_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_time_str)):
-                                
-                                try:
-                                    start_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{start_time_str}")
-                                    end_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{end_time_str}")
+                            # Function to add a shift if valid
+                            def add_shift_if_valid(start_str, end_str, date_obj, shift_type_idx):
+                                if (start_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_str) and
+                                    end_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_str)):
+                                    try:
+                                        start_dt_obj = dt.datetime.fromisoformat(f"{date_obj.isoformat()}T{start_str}")
+                                        end_dt_obj = dt.datetime.fromisoformat(f"{date_obj.isoformat()}T{end_str}")
 
-                                    # Handle overnight shifts (end time on next day)
-                                    if end_dt_obj < start_dt_obj:
-                                        end_dt_obj += dt.timedelta(days=1)
+                                        if end_dt_obj < start_dt_obj:
+                                            end_dt_obj += dt.timedelta(days=1)
 
-                                    # Create a unique key for tracking shifts. Add shift_pair_idx to distinguish multiple shifts on the same day.
-                                    key = f"{current_date:%Y%m%d}-{shift_pair_idx}-{start_time_str.replace(':','')}-{end_time_str.replace(':','')}"
-                                    shifts.append({
-                                        "key": key,
-                                        "date": current_date.isoformat(),
-                                        "start": start_time_str,
-                                        "end": end_time_str
-                                    })
-                                    print(f"DEBUG: Added shift for {current_date.isoformat()} from {start_time_str} to {end_time_str} (Key: {key})")
-                                except ValueError as ve:
-                                    app.logger.warning(f"    Error parsing time for {month_name} {day} (shift {shift_pair_idx + 1}): {ve}. Skipping.")
-                                    print(f"DEBUG: ValueError for {month_name} {day} (shift {shift_pair_idx + 1}): {ve}")
-                            else:
-                                app.logger.info(f"    No valid shift times found for {month_name} {day} (shift {shift_pair_idx + 1}). Skipping.")
-                                print(f"DEBUG: Invalid time format for {month_name} {day} (shift {shift_pair_idx + 1}). Start: '{start_time_str}', End: '{end_time_str}'")
+                                        key = f"{date_obj:%Y%m%d}-{shift_type_idx}-{start_str.replace(':','')}-{end_str.replace(':','')}"
+                                        shifts.append({
+                                            "key": key,
+                                            "date": date_obj.isoformat(),
+                                            "start": start_str,
+                                            "end": end_str
+                                        })
+                                        print(f"DEBUG: Added shift for {date_obj.isoformat()} from {start_str} to {end_str} (Key: {key})")
+                                    except ValueError as ve:
+                                        app.logger.warning(f"    Error parsing time for {date_obj.isoformat()} shift {shift_type_idx}: {ve}. Skipping.")
+                                        print(f"DEBUG: ValueError for {date_obj.isoformat()} shift {shift_type_idx}: {ve}")
+                                else:
+                                    app.logger.info(f"    No valid shift times found for {date_obj.isoformat()} shift {shift_type_idx}. Skipping.")
+                                    print(f"DEBUG: Invalid time format for {date_obj.isoformat()} shift {shift_type_idx}. Start: '{start_str}', End: '{end_str}'")
+
+                            add_shift_if_valid(start_time_str1, end_time_str1, current_date, 1)
+                            add_shift_if_valid(start_time_str2, end_time_str2, current_date, 2)
+                            
+                            current_day_counter += 1 # Increment day counter for the next iteration
+
                     # --- End of specific table data processing ---
 
     except Exception as e:
@@ -492,7 +705,7 @@ def google_login():
         return redirect(authorization_url)
     except ValueError as e:
         app.logger.error(f"Configuration error for Google login: {e}")
-        return render_template("index.html", logged_in=False, error=f"Error de configuració de l'aplicació: {e}. Comprova les variables d'entorn.")
+        return render_template("index.html", logged_in=False, error=f"Error de configuració de l'aplicació: {e}. Comproba les variables d'entorn.")
     except Exception as e:
         app.logger.error(f"Error during Google login initiation: {e}")
         return render_template("index.html", logged_in=False, error="No s'ha pogut iniciar la sessió amb Google.")
