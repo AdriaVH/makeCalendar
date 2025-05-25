@@ -25,6 +25,8 @@
         .button.primary:hover { background-color: #0056b3; }
         .button.secondary { background-color: #6c757d; color: white; border: none; }
         .button.secondary:hover { background-color: #545b62; }
+        .button.danger { background-color: #dc3545; color: white; border: none; }
+        .button.danger:hover { background-color: #c82333; }
         input[type="file"] { margin-top: 15px; margin-bottom: 15px; display: block; }
         input[type="submit"] {
             display: block;
@@ -37,10 +39,19 @@
             font-size: 18px;
             cursor: pointer;
             transition: background-color 0.3s ease;
+            margin-top: 15px; /* Added margin */
         }
         input[type="submit"]:hover { background-color: #218838; }
         hr { border: 0; border-top: 1px solid #eee; margin: 25px 0; }
         .footer { text-align: center; margin-top: 30px; font-size: 0.9em; color: #777; }
+        .delete-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px dashed #ddd;
+            text-align: center;
+        }
+        .delete-section p { margin-bottom: 15px; }
+        .delete-section input[type="checkbox"] { margin-right: 8px; }
     </style>
 </head>
 <body>
@@ -62,6 +73,22 @@
                 <input type="submit" value="Upload & Sync Shifts">
             </form>
             <hr>
+
+            <div class="delete-section">
+                <h3>Delete App-Created Shifts</h3>
+                <p style="color: #dc3545;">
+                    <input type="checkbox" id="confirm_delete" onclick="toggleDeleteButton()">
+                    **WARNING:** Check this box to confirm you want to delete **ALL** shifts previously created by this app.
+                    This will **NOT** delete events you created manually.
+                </p>
+                <form action="{{ url_for('delete_all_shifts') }}" method="post" onsubmit="return confirmDelete()">
+                    <button type="submit" class="button danger" id="delete_button" disabled>
+                        Delete All My App-Created Shifts
+                    </button>
+                </form>
+            </div>
+
+            <hr>
             <a href="{{ url_for('logout') }}" class="button secondary">Logout</a>
         {% else %}
             <p>Please sign in with your Google account to upload your shifts.</p>
@@ -71,5 +98,22 @@
     <div class="footer">
         <p>Built with Flask and Google Calendar API</p>
     </div>
+
+    <script>
+        function toggleDeleteButton() {
+            var checkbox = document.getElementById('confirm_delete');
+            var button = document.getElementById('delete_button');
+            button.disabled = !checkbox.checked;
+        }
+
+        function confirmDelete() {
+            var checkbox = document.getElementById('confirm_delete');
+            if (!checkbox.checked) {
+                alert("Please confirm by checking the box before deleting all shifts.");
+                return false; // Prevent form submission
+            }
+            return confirm("Are you absolutely sure you want to delete ALL shifts created by this app? This action cannot be undone.");
+        }
+    </script>
 </body>
 </html>
