@@ -65,10 +65,10 @@ MONTH_DATA_BOUNDING_BOXES = {
 }
 
 # Define table extraction settings
-# Keeping the relaxed settings as they don't depend on bounding box orientation
+# IMPORTANT: Adjusting join_tolerance to make column detection more strict
 TABLE_SETTINGS = {
-    "snap_tolerance": 5,
-    "join_tolerance": 5,
+    "snap_tolerance": 5, # Can try adjusting this if lines are not picked up
+    "join_tolerance": 1, # Lowered from 5 to 1 to prevent horizontal cell merging
     "edge_min_length": 3,
 }
 
