@@ -190,20 +190,30 @@ def parse_pdf(data, target_months=None):
                     # Get headers, skipping empty cells
                     raw_headers = table_data[header_row_index]
                     
-                    # Find column indices for 'Entrada' and 'Sortida'
-                    entrada_col_idx = -1
-                    sortida_col_idx = -1
+                    # Find all column indices for 'Entrada' and 'Sortida'
+                    entrada_col_indices = []
+                    sortida_col_indices = []
                     
                     for i, header_cell in enumerate(raw_headers):
                         if header_cell:
                             cleaned_header = header_cell.strip().lower()
                             if "entrada" in cleaned_header:
-                                entrada_col_idx = i
+                                entrada_col_indices.append(i)
                             elif "sortida" in cleaned_header:
-                                sortida_col_idx = i
+                                sortida_col_indices.append(i)
                     
-                    if entrada_col_idx == -1 or sortida_col_idx == -1:
-                        app.logger.warning(f"    'Entrada' or 'Sortida' columns not found in {month_name}'s table. Skipping.")
+                    if not entrada_col_indices or not sortida_col_indices:
+                        app.logger.warning(f"    No 'Entrada' or 'Sortida' columns found in {month_name}'s table. Skipping.")
+                        continue
+
+                    # Assuming 'Entrada' and 'Sortida' columns appear in pairs
+                    # We'll create pairs of (entrada_idx, sortida_idx)
+                    shift_column_pairs = []
+                    for i in range(min(len(entrada_col_indices), len(sortida_col_indices))):
+                        shift_column_pairs.append((entrada_col_indices[i], sortida_col_indices[i]))
+
+                    if not shift_column_pairs:
+                        app.logger.warning(f"    Could not form valid Entrada/Sortida pairs for {month_name}. Skipping.")
                         continue
 
                     # Iterate through rows starting from the row *after* the header row
@@ -229,34 +239,36 @@ def parse_pdf(data, target_months=None):
                             app.logger.warning(f"    Invalid day '{day_str}' or month '{month_name}' for date creation. Skipping.")
                             continue
 
-                        # Extract start and end times using their determined column indices
-                        start_time_str = row[entrada_col_idx].strip() if len(row) > entrada_col_idx and row[entrada_col_idx] else None
-                        end_time_str = row[sortida_col_idx].strip() if len(row) > sortida_col_idx and row[sortida_col_idx] else None
+                        # Now, iterate through each shift column pair
+                        for shift_pair_idx, (entrada_col_idx, sortida_col_idx) in enumerate(shift_column_pairs):
+                            # Extract start and end times using their determined column indices
+                            start_time_str = row[entrada_col_idx].strip() if len(row) > entrada_col_idx and row[entrada_col_idx] else None
+                            end_time_str = row[sortida_col_idx].strip() if len(row) > sortida_col_idx and row[sortida_col_idx] else None
 
-                        # Validate time formats
-                        if (start_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_time_str) and
-                            end_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_time_str)):
-                            
-                            try:
-                                start_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{start_time_str}")
-                                end_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{end_time_str}")
+                            # Validate time formats
+                            if (start_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", start_time_str) and
+                                end_time_str and re.fullmatch(r"(\d{1,2}):(\d{2})", end_time_str)):
+                                
+                                try:
+                                    start_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{start_time_str}")
+                                    end_dt_obj = dt.datetime.fromisoformat(f"{current_date.isoformat()}T{end_time_str}")
 
-                                # Handle overnight shifts (end time on next day)
-                                if end_dt_obj < start_dt_obj:
-                                    end_dt_obj += dt.timedelta(days=1)
+                                    # Handle overnight shifts (end time on next day)
+                                    if end_dt_obj < start_dt_obj:
+                                        end_dt_obj += dt.timedelta(days=1)
 
-                                # Create a unique key for tracking shifts
-                                key = f"{current_date:%Y%m%d}-{start_time_str.replace(':','')}-{end_time_str.replace(':','')}"
-                                shifts.append({
-                                    "key": key,
-                                    "date": current_date.isoformat(),
-                                    "start": start_time_str,
-                                    "end": end_time_str
-                                })
-                            except ValueError as ve:
-                                app.logger.warning(f"    Error parsing time for {month_name} {day}: {ve}. Skipping.")
-                        else:
-                            app.logger.info(f"    No valid shift times found for {month_name} {day}. Skipping.")
+                                    # Create a unique key for tracking shifts. Add shift_pair_idx to distinguish multiple shifts on the same day.
+                                    key = f"{current_date:%Y%m%d}-{shift_pair_idx}-{start_time_str.replace(':','')}-{end_time_str.replace(':','')}"
+                                    shifts.append({
+                                        "key": key,
+                                        "date": current_date.isoformat(),
+                                        "start": start_time_str,
+                                        "end": end_time_str
+                                    })
+                                except ValueError as ve:
+                                    app.logger.warning(f"    Error parsing time for {month_name} {day} (shift {shift_pair_idx + 1}): {ve}. Skipping.")
+                            else:
+                                app.logger.info(f"    No valid shift times found for {month_name} {day} (shift {shift_pair_idx + 1}). Skipping.")
                     # --- End of specific table data processing ---
 
     except Exception as e:
