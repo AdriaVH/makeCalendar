@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ca">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shift Uploader to Google Calendar</title>
+    <title>Pujada de Torns al Calendari de Google</title>
     <style>
         body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
         .container { max-width: 600px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -52,11 +52,28 @@
         }
         .delete-section p { margin-bottom: 15px; }
         .delete-section input[type="checkbox"] { margin-right: 8px; }
+        
+        /* New Styles for Month Selection */
+        .month-select-group {
+            margin-bottom: 15px;
+        }
+        .month-select-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .month-select-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box; /* Include padding in width */
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📤 Shift → Google Calendar</h1>
+        <h1>📤 Torns → Calendari de Google</h1>
 
         {% if message %}
             <div class="message success">{{ message }}</div>
@@ -66,37 +83,48 @@
         {% endif %}
 
         {% if logged_in %}
-            <p>You are signed in with Google!</p>
+            <p>Has iniciat sessió amb Google!</p>
             <form action="{{ url_for('upload_pdf') }}" method="post" enctype="multipart/form-data">
-                <label for="pdf_file">Upload PDF with Entrada/Sortida schedule:</label>
+                
+                <div class="month-select-group">
+                    <label for="months">Selecciona els mesos a processar (Ctrl/Cmd+clic per seleccionar-ne diversos):</label>
+                    <select name="months" id="months" multiple size="6">
+                        {% for month_key, month_display_name in available_months %}
+                            <option value="{{ month_key }}">{{ month_display_name }}</option>
+                        {% endfor %}
+                    </select>
+                    <small>Si no se selecciona cap mes, es processaran tots els mesos configurats.</small>
+                </div>
+
+                <label for="pdf_file">Puja el PDF amb l'horari d'Entrada/Sortida:</label>
                 <input type="file" name="pdf_file" id="pdf_file" accept=".pdf">
-                <input type="submit" value="Upload & Sync Shifts">
+                <input type="submit" value="Pujar i Sincronitzar Torns">
             </form>
             <hr>
 
             <div class="delete-section">
-                <h3>Delete App-Created Shifts</h3>
+                <h3>Eliminar Torns Creats per l'Aplicació</h3>
                 <p style="color: #dc3545;">
                     <input type="checkbox" id="confirm_delete" onclick="toggleDeleteButton()">
-                    **WARNING:** Check this box to confirm you want to delete **ALL** shifts previously created by this app.
-                    This will **NOT** delete events you created manually.
+                    **ADVERTÈNCIA:** Marca aquesta casella per confirmar que vols eliminar **TOTS** els torns creats prèviament per aquesta aplicació.
+                    Això **NO** eliminarà els esdeveniments que hagis creat manualment.
                 </p>
                 <form action="{{ url_for('delete_all_shifts') }}" method="post" onsubmit="return confirmDelete()">
                     <button type="submit" class="button danger" id="delete_button" disabled>
-                        Delete All My App-Created Shifts
+                        Eliminar Tots els Meus Torns Creats per l'Aplicació
                     </button>
                 </form>
             </div>
 
             <hr>
-            <a href="{{ url_for('logout') }}" class="button secondary">Logout</a>
+            <a href="{{ url_for('logout') }}" class="button secondary">Tancar sessió</a>
         {% else %}
-            <p>Please sign in with your Google account to upload your shifts.</p>
-            <a href="{{ url_for('google_login') }}" class="button primary">Sign in with Google</a>
+            <p>Si us plau, inicia sessió amb el teu compte de Google per pujar els teus torns.</p>
+            <a href="{{ url_for('google_login') }}" class="button primary">Inicia sessió amb Google</a>
         {% endif %}
     </div>
     <div class="footer">
-        <p>Built with Flask and Google Calendar API</p>
+        <p>Desenvolupat amb Flask i l'API de Google Calendar</p>
     </div>
 
     <script>
@@ -109,10 +137,10 @@
         function confirmDelete() {
             var checkbox = document.getElementById('confirm_delete');
             if (!checkbox.checked) {
-                alert("Please confirm by checking the box before deleting all shifts.");
+                alert("Si us plau, confirma marcant la casella abans d'eliminar tots els torns.");
                 return false; // Prevent form submission
             }
-            return confirm("Are you absolutely sure you want to delete ALL shifts created by this app? This action cannot be undone.");
+            return confirm("Estàs absolutament segur que vols eliminar TOTS els torns creats per aquesta aplicació? Aquesta acció no es pot desfer.");
         }
     </script>
 </body>
