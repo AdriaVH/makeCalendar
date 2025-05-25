@@ -1,14 +1,3 @@
-It seems you might have included the explanatory text along with the Python code when updating your `app.py` file. The first line of your `app.py` should always be `import io, re, datetime as dt`.
-
-Please replace the *entire* content of your `app.py` file with *only* the Python code block provided below, making sure no additional text is included at the beginning or end.
-
-The `index.html` file remains the same as provided in the previous responses.
-
----
-
-### `app.py` (Corrected - Ensure only Python code is copied)
-
-```python
 import io, re, datetime as dt
 import os
 from flask import Flask, redirect, url_for, session, request, render_template, send_from_directory
@@ -583,4 +572,3 @@ if __name__ == "__main__":
     # In production, Render sets the PORT environment variable.
     # debug=True should be False in production for security.
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-```
