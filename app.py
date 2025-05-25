@@ -67,9 +67,10 @@ MONTH_DATA_BOUNDING_BOXES = {
 # Define table extraction settings
 # IMPORTANT: Adjusting join_tolerance to make column detection more strict
 TABLE_SETTINGS = {
-    "snap_tolerance": 5, # Can try adjusting this if lines are not picked up
-    "join_tolerance": 1, # Lowered from 5 to 1 to prevent horizontal cell merging
+    "snap_tolerance": 8, # Increased snap tolerance to help connect fragmented lines/text
+    "join_tolerance": 1, # Kept low to prevent horizontal cell merging
     "edge_min_length": 3,
+    "vertical_strategy": "text_edges" # Tell pdfplumber to infer vertical lines from text alignment
 }
 
 
@@ -262,10 +263,21 @@ def parse_pdf(data, target_months=None):
                             # Ensure we have pairs of start and end times
                             # Iterate up to the length of the shorter list to avoid index errors
                             for i in range(min(len(start_times), len(end_times))):
-                                start_time_str = start_times[i]
-                                end_time_str = end_times[i]
+                                start_time_raw = start_times[i]
+                                end_time_raw = end_times[i]
 
                                 try:
+                                    # Clean and format time strings to ensure HH:MM with leading zero if needed
+                                    def format_time_str(time_str):
+                                        cleaned = time_str.replace(' ', '').strip()
+                                        if ':' in cleaned:
+                                            h, m = cleaned.split(':')
+                                            return f"{h.zfill(2)}:{m.zfill(2)}"
+                                        return cleaned # Return as is if no colon (though regex should prevent this)
+                                    
+                                    start_time_str = format_time_str(start_time_raw)
+                                    end_time_str = format_time_str(end_time_raw)
+
                                     start_dt_obj = dt.datetime.fromisoformat(f"{date_obj.isoformat()}T{start_time_str}")
                                     end_dt_obj = dt.datetime.fromisoformat(f"{date_obj.isoformat()}T{end_time_str}")
 
@@ -285,7 +297,7 @@ def parse_pdf(data, target_months=None):
                                     shifts_added_in_this_call = True # Set flag to True if a shift is added
                                 except ValueError as ve:
                                     app.logger.warning(f"    Error parsing time for {date_obj.isoformat()} shift group {shift_group_idx}, entry {i}: {ve}. Skipping.")
-                                    print(f"DEBUG: ValueError for {date_obj.isoformat()} shift group {shift_group_idx}, entry {i}: {ve}")
+                                    print(f"DEBUG: ValueError for {date_obj.isoformat()} shift group {shift_group_idx}, entry {i}: {ve} (Attempted: {date_obj.isoformat()}T{start_time_str} to {date_obj.isoformat()}T{end_time_str})")
                             
                             # If no shifts were added in this call, and there was some non-empty input, log it
                             if not shifts_added_in_this_call and ((start_str_cell and start_str_cell.strip() != "") or (end_str_cell and end_str_cell.strip() != "")):
@@ -495,7 +507,7 @@ def oauth2callback():
 
     if error:
         app.logger.error(f"OAuth callback error: {error}")
-        return render_template("index.html", logged_in=False, error=f"Sessió amb Google denegada o error: {error}")
+        return render_template("index.html", logged_in=False, error=f"Sessió con Google denegada o error: {error}")
 
     if not code:
         app.logger.error("OAuth callback received no code.")
