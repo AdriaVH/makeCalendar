@@ -1,3 +1,12 @@
+It seems there was a syntax error in the `app.py` file, specifically an unclosed parenthesis on the last line where `app.run` is called.
+
+I have corrected this syntax error. Please replace the content of your `app.py` file with the corrected code below. The `index.html` file remains the same as the previous response.
+
+---
+
+### `app.py` (Corrected Syntax Error)
+
+```python
 import io, re, datetime as dt
 import os
 from flask import Flask, redirect, url_for, session, request, render_template, send_from_directory
@@ -571,4 +580,5 @@ def logout():
 if __name__ == "__main__":
     # In production, Render sets the PORT environment variable.
     # debug=True should be False in production for security.
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+```
