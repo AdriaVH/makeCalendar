@@ -70,7 +70,7 @@ TABLE_SETTINGS = {
     "snap_tolerance": 8, # Increased snap tolerance to help connect fragmented lines/text
     "join_tolerance": 1, # Kept low to prevent horizontal cell merging
     "edge_min_length": 3,
-    "vertical_strategy": "text_edges" # Tell pdfplumber to infer vertical lines from text alignment
+    "vertical_strategy": "text" # CORRECTED: Use "text" to infer vertical lines from text alignment
 }
 
 
