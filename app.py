@@ -257,6 +257,8 @@ def parse_pdf(data, target_months=None):
                             start_times = re.findall(r'(\d{1,2}:\d{2})', start_str_cell)
                             end_times = re.findall(r'(\d{1,2}:\d{2})', end_str_cell)
                             
+                            shifts_added_in_this_call = False # Flag to track if any shifts were added
+
                             # Ensure we have pairs of start and end times
                             # Iterate up to the length of the shorter list to avoid index errors
                             for i in range(min(len(start_times), len(end_times))):
@@ -280,12 +282,13 @@ def parse_pdf(data, target_months=None):
                                         "end": end_time_str
                                     })
                                     print(f"DEBUG: Added shift for {date_obj.isoformat()} from {start_time_str} to {end_time_str} (Key: {key})")
+                                    shifts_added_in_this_call = True # Set flag to True if a shift is added
                                 except ValueError as ve:
                                     app.logger.warning(f"    Error parsing time for {date_obj.isoformat()} shift group {shift_group_idx}, entry {i}: {ve}. Skipping.")
                                     print(f"DEBUG: ValueError for {date_obj.isoformat()} shift group {shift_group_idx}, entry {i}: {ve}")
                             
-                            # If no valid pairs were found but strings were present, log it
-                            elif (start_str_cell and start_str_cell.strip() != "") or (end_str_cell and end_str_cell.strip() != ""):
+                            # If no shifts were added in this call, and there was some non-empty input, log it
+                            if not shifts_added_in_this_call and ((start_str_cell and start_str_cell.strip() != "") or (end_str_cell and end_str_cell.strip() != "")):
                                 app.logger.info(f"    No valid HH:MM shift pairs found in '{start_str_cell}' and '{end_str_cell}' for {date_obj.isoformat()} shift group {shift_group_idx}. Skipping.")
 
 
